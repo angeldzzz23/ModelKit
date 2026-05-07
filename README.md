@@ -1,89 +1,112 @@
 # ModelKit
 
-A Swift package for downloading, loading, and managing on-device ML models on Apple platforms (iOS 26+, macOS 26+).
+> One API for downloading, loading, and managing on-device ML models on Apple platforms — across MLX, WhisperKit, and whatever you plug in next.
 
-ModelKit is a thin orchestration layer over framework-specific loaders. It bundles a model catalog type, a download/load/delete API, and pluggable loaders for MLX (LLM + VLM) and WhisperKit (speech-to-text). Adding a new model family is a single conformance plus one register call — no edits to core.
+`mlx-swift-lm`, `WhisperKit`, and friends each ship their own download + load APIs with different shapes, different cache layouts, and different ways to express progress. If you support more than one in the same app you end up writing the same glue. ModelKit is that glue, factored into a package.
 
-## Why this exists
+## What you get
 
-`mlx-swift-lm`, `WhisperKit`, and friends each ship their own download + load APIs with different shapes, different cache layouts, and different ways to express progress. If you want to support more than one in the same app you end up writing the same glue. ModelKit is that glue, factored into a package so you don't have to.
+- **`ModelStore`** — `@Observable @MainActor` orchestrator. Bind it to SwiftUI; it surfaces per-entry download progress, load state, and errors as observable state.
+- **MLX (`.llm`, `.vlm`) and WhisperKit (`.whisper`) loaders**, ready to register.
+- **Concurrent loads + per-kind cap.** Whisper alongside an LLM alongside a VLM, all in memory at once. Loading a second LLM replaces the first.
+- **Default-model auto-load.** Set `store.defaults`, call `await store.loadDefaults()` at startup; the store fans the loads out concurrently.
+- **Open `ModelKind`.** Add a new family with one conformance + one register call. No core edits.
+- **Single shared on-disk root** at `Application Support/ModelKit/models/` (overridable). HF-compatible layout, so a system Python install can share files.
 
 ## Products
 
 | Product | Depends on | Use it when |
 |---|---|---|
-| `ModelKit` | (nothing) | Always — core types, orchestration, registry. No framework deps. |
-| `ModelKitMLX` | `ModelKit`, `mlx-swift-lm`, `swift-transformers`, `swift-huggingface` | You want to run LLMs / VLMs via MLX. |
-| `ModelKitWhisper` | `ModelKit`, `WhisperKit` | You want speech-to-text via WhisperKit. |
+| `ModelKit` | (nothing) | Always — types + orchestration. Zero framework deps. |
+| `ModelKitMLX` | `ModelKit`, `mlx-swift-lm`, `swift-transformers`, `swift-huggingface` | LLMs / VLMs via MLX. |
+| `ModelKitWhisper` | `ModelKit`, `WhisperKit` | Speech-to-text via WhisperKit. |
 
-Link only what you need — a Whisper-only app skips `ModelKitMLX` entirely.
+A Whisper-only app links `ModelKit` + `ModelKitWhisper` and skips MLX entirely — and its transitive deps.
 
 ## Install
 
-**Local SPM** (during development): *File → Add Package Dependencies → Add Local…* and point at this package directory.
+**Local SPM** (during development): *Xcode → File → Add Package Dependencies → Add Local…* and point at this directory.
 
-**Remote SPM** (once published): add to your `Package.swift`:
+**Remote SPM** (once published):
 
 ```swift
 .package(url: "https://github.com/<you>/ModelKit", from: "0.1.0"),
 ```
 
-Then add the products you want to your target's dependencies.
+Then add `ModelKit` plus whichever loaders you need (`ModelKitMLX`, `ModelKitWhisper`) to your target's dependencies.
 
-## Quick start
-
-1. Register the loader(s) for the kinds you'll use, once at launch:
+## 30-second example
 
 ```swift
 import SwiftUI
+import ModelKit
 import ModelKitMLX
 import ModelKitWhisper
 
-@main
-struct MyApp: App {
-    init() {
-        ModelKitMLX.register()      // enables .llm and .vlm
-        ModelKitWhisper.register()  // enables .whisper
-    }
-    var body: some Scene { WindowGroup { ContentView() } }
-}
-```
-
-2. Define a catalog (app-specific data, not bundled in the package):
-
-```swift
-import ModelKit
-
-enum MyCatalog {
+// 1. Catalog — app-specific, not bundled in the package.
+enum Catalog {
     static let all: [ModelEntry] = [
         .init("mlx-community/Llama-3.2-3B-Instruct-4bit", "Llama 3.2 3B", .llm,     1.8, .phone),
-        .init("mlx-community/gemma-3-4b-it-qat-4bit",     "Gemma 3 4B Vision", .vlm, 2.8, .tabletOrMac),
-        .init("openai_whisper-base.en",                   "Whisper base (En)", .whisper, 0.14, .phone),
+        .init("openai_whisper-tiny.en",                   "Whisper Tiny", .whisper, 0.04, .phone),
     ]
+}
+
+// 2. Build a registry, register loaders, hand it to the store.
+@main
+struct MyApp: App {
+    @State private var store: ModelStore
+
+    init() {
+        let registry = ModelKindRegistry()
+        ModelKitMLX.register(into: registry)      // .llm + .vlm
+        ModelKitWhisper.register(into: registry)  // .whisper
+        _store = State(initialValue: ModelStore(registry: registry))
+    }
+
+    var body: some Scene {
+        WindowGroup {
+            ContentView().environment(store)
+        }
+    }
+}
+
+// 3. Drive it from a view.
+struct ContentView: View {
+    @Environment(ModelStore.self) private var store
+
+    var body: some View {
+        let entry = Catalog.all[0]
+        VStack {
+            if let p = store.progress(for: entry) {
+                ProgressView(value: p)
+            }
+            Button("Download") { store.startDownload(entry) }
+            Button("Load")     { Task { await store.load(entry) } }
+            Button("Delete")   { store.delete(entry) }
+        }
+    }
 }
 ```
 
-3. Drive `ModelStore` from your UI (or anything else):
-
-```swift
-let store = ModelStore.shared
-let entry = MyCatalog.all[0]
-
-store.startDownload(entry)              // snapshot to disk only
-await store.load(entry)                 // download (if needed) + into memory
-store.unload()
-store.delete(entry)
-```
-
-`ModelStore` is `@Observable` and `@MainActor` — bind directly to SwiftUI views.
+`store` is `@Observable` — every read above (`progress(for:)`, etc.) participates in observation tracking. Mutate from anywhere; views re-render automatically.
 
 ## Concepts
 
 ### `ModelKind`
-Open value type identifying a model family. Adding a new kind = one new static constant. Built-in: `.llm`, `.vlm`, `.whisper`.
+
+Open value type identifying a family. Adding a new kind = one static constant.
+
+```swift
+public extension ModelKind {
+    static let embedding = ModelKind(id: "embedding", label: "Embedding")
+}
+```
+
+Built-in: `.llm`, `.vlm`, `.whisper`.
 
 ### `ModelKindLoader`
-The pluggable boundary. One conformance per family, four methods:
+
+The pluggable boundary. One conformance per family:
 
 ```swift
 public protocol ModelKindLoader: Sendable {
@@ -95,49 +118,95 @@ public protocol ModelKindLoader: Sendable {
 }
 ```
 
-### `LoadedModel`
-Type-erased handle returned by `load`. Cast to the concrete wrapper to use the underlying container:
+### `ModelKindRegistry`
+
+A `@MainActor` instance. Construct one, register loaders into it, hand it to a `ModelStore`. One registry per store keeps lookups isolated and makes tests trivial.
 
 ```swift
-guard let llm = store.loadedModel as? LLMModel else { return }
+let registry = ModelKindRegistry()
+ModelKitMLX.register(into: registry)            // bundles MLXLLMLoader + MLXVLMLoader
+ModelKitWhisper.register(into: registry)        // bundles WhisperKitLoader
+let store = ModelStore(registry: registry)
+```
+
+### `ModelStore`
+
+The orchestrator. Knows nothing about MLX or WhisperKit — looks up the right loader and delegates. State (all observable):
+
+| Property | Purpose |
+|---|---|
+| `loadedModels: [ModelKind: any LoadedModel]` | currently-loaded models — one per kind |
+| `loadingEntryIds: Set<String>` | mid-load entry.ids — concurrent loads supported |
+| `downloadProgress: [String: Double]` | active downloads keyed by `entry.id` |
+| `lastError: String?` | most recent failure message |
+| `diskRevision: Int` | bumps on download/load/delete; observe to refresh disk-derived UI |
+| `defaults: [ModelEntry]` | consumer-set; loaded by `loadDefaults()` |
+
+Action surface:
+
+```swift
+store.startDownload(entry)             // disk only; progress in store.downloadProgress
+store.cancelDownload(entry)
+await store.load(entry)                // download if needed + bring into memory
+store.unload(entry)                    // free memory, keep on disk
+store.delete(entry)                    // remove from disk
+await store.loadDefaults()             // concurrent load of every entry in store.defaults
+```
+
+`load(_:)` is idempotent — calling it for an entry that's already loaded or mid-load is a no-op.
+
+### `LoadedModel`
+
+Type-erased handle. Cast to the concrete wrapper to use the underlying container:
+
+```swift
+guard let llm = store.loadedModels[.llm] as? LLMModel else { return }
 let container: ModelContainer = llm.container   // from MLXLMCommon
 ```
 
-Concrete types per kind: `LLMModel`, `VLMModel` (in `ModelKitMLX`), `WhisperModel` (in `ModelKitWhisper`).
-
-### `ModelStore`
-Orchestrator. Knows nothing about MLX or WhisperKit — looks up the right loader in `ModelKindRegistry` and delegates. Per-entry download progress, cancellation, and one loaded model held at a time.
+Concrete wrappers: `LLMModel`, `VLMModel` (in `ModelKitMLX`), `WhisperModel` (in `ModelKitWhisper`).
 
 ### `ModelStorage.root`
-Single on-disk root for every loader's cache. Defaults to `Application Support/ModelKit/models`. Override before any loader runs:
+
+Single on-disk root for every loader's cache. Override **before** any loader runs:
 
 ```swift
 ModelStorage.customRoot = URL(fileURLWithPath: "/custom/path")
 ```
 
-## Adding a new kind
-
-Say you want CoreML embeddings:
+## Default models
 
 ```swift
-// 1. Define the kind
+store.defaults = [Catalog.all[0], Catalog.all[1]]
+
+// Anywhere a Task is appropriate — typically a root view's .task modifier.
+.task { await store.loadDefaults() }
+```
+
+`loadDefaults()` runs concurrently and is safe to call repeatedly. The library doesn't persist `defaults` for you — that's a consumer concern. The usual pattern is to store `[entry.id]` in UserDefaults / SwiftData and re-resolve against your catalog at startup.
+
+## Adding a new kind
+
+CoreML embeddings, Stable Diffusion, anything else:
+
+```swift
+// 1. Define the kind.
 extension ModelKind {
     static let embedding = ModelKind(id: "embedding", label: "Embedding")
 }
 
-// 2. Define the loaded-model wrapper
+// 2. Define the loaded-model wrapper.
 final class EmbeddingModel: LoadedModel {
     let kind = ModelKind.embedding
     let repoId: String
-    let model: SomeEmbeddingPipeline
-    init(repoId: String, model: SomeEmbeddingPipeline) {
-        self.repoId = repoId; self.model = model
+    let pipeline: SomeEmbeddingPipeline
+    init(repoId: String, pipeline: SomeEmbeddingPipeline) {
+        self.repoId = repoId; self.pipeline = pipeline
     }
 }
 
-// 3. Define the loader
+// 3. Define the loader.
 struct CoreMLEmbeddingLoader: ModelKindLoader {
-    static let shared = CoreMLEmbeddingLoader()
     let kind = ModelKind.embedding
     func isDownloaded(repoId: String) -> Bool { /* … */ }
     func startDownload(repoId: String, progressHandler: ...) async throws { /* … */ }
@@ -145,8 +214,8 @@ struct CoreMLEmbeddingLoader: ModelKindLoader {
     func delete(repoId: String) { /* … */ }
 }
 
-// 4. Register at launch
-ModelKindRegistry.register(CoreMLEmbeddingLoader.shared)
+// 4. Register at launch.
+registry.register(CoreMLEmbeddingLoader())
 ```
 
 `ModelStore`, your catalog, and your UI need no changes — they all go through the registry.
@@ -155,22 +224,26 @@ ModelKindRegistry.register(CoreMLEmbeddingLoader.shared)
 
 ```
 Application Support/ModelKit/models/
-├── models/                                  ← HuggingFace cache (MLX kinds)
-│   ├── mlx-community/Llama-3.2-3B-Instruct-4bit/
-│   │   ├── snapshots/<commit>/...
-│   │   └── refs/main
-│   └── argmaxinc/whisperkit-coreml/
-│       └── openai_whisper-base.en/
-│           └── ...
+└── models/                                      ← HuggingFace-style cache
+    ├── mlx-community/Llama-3.2-3B-Instruct-4bit/
+    │   ├── snapshots/<commit>/...
+    │   └── refs/main
+    └── argmaxinc/whisperkit-coreml/
+        └── openai_whisper-base.en/
+            └── ...
 ```
 
 Layout matches the Python HF cache, so a system Python install can share files.
 
+## Threading
+
+`ModelStore` and `ModelKindRegistry` are `@MainActor`. Loader conformances are `Sendable` and may run anywhere; their `progressHandler` callbacks are `@Sendable (Double) -> Void` — hop to the actor you need before touching UI state.
+
 ## Status
 
-- iOS 26+, macOS 26+
+- iOS 18+, macOS 15+
 - Swift 6.2
-- Built against `mlx-swift-lm` 3.31.3+, `swift-transformers` 1.3+, `swift-huggingface` 0.9.x, `WhisperKit` `main`
+- Built against `mlx-swift-lm` 3.31.x, `swift-transformers` 1.3+, `swift-huggingface` 0.9.x, `WhisperKit` `main`
 
 ## License
 
