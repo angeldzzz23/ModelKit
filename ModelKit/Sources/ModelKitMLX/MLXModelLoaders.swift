@@ -39,16 +39,15 @@ public final class VLMModel: LoadedModel {
 
 // MARK: - Shared HF infrastructure
 
-/// HubClient + cache shared by every HuggingFace-backed loader (LLM, VLM,
-/// future embeddings, …). Single source of truth for the cache directory.
+/// HubClient + cache for HuggingFace-backed loaders (LLM, VLM, future
+/// embeddings, …). One instance per cache root — share it across the
+/// HF-backed loaders you register so they hit the same cache.
 public final class MLXHuggingFaceBackend: @unchecked Sendable {
-    public static let shared = MLXHuggingFaceBackend()
-
     public let cache: HubCache
     public let client: HubClient
 
-    private init() {
-        let cache = HubCache(cacheDirectory: ModelStorage.root)
+    public init(root: URL = ModelStorage.root) {
+        let cache = HubCache(cacheDirectory: root)
         self.cache = cache
         self.client = HubClient(cache: cache)
     }
@@ -91,25 +90,29 @@ public final class MLXHuggingFaceBackend: @unchecked Sendable {
 // MARK: - LLM loader
 
 public struct MLXLLMLoader: ModelKindLoader {
-    public static let shared = MLXLLMLoader()
     public let kind = ModelKind.llm
+    public let backend: MLXHuggingFaceBackend
+
+    public init(backend: MLXHuggingFaceBackend) {
+        self.backend = backend
+    }
 
     public func isDownloaded(repoId: String) -> Bool {
-        MLXHuggingFaceBackend.shared.isDownloaded(repoId: repoId)
+        backend.isDownloaded(repoId: repoId)
     }
 
     public func startDownload(
         repoId: String,
         progressHandler: @escaping @Sendable (Double) -> Void
     ) async throws {
-        try await MLXHuggingFaceBackend.shared.snapshot(repoId: repoId, progress: progressHandler)
+        try await backend.snapshot(repoId: repoId, progress: progressHandler)
     }
 
     public func load(
         repoId: String,
         progressHandler: @escaping @Sendable (Double) -> Void
     ) async throws -> any LoadedModel {
-        let client = MLXHuggingFaceBackend.shared.client
+        let client = backend.client
         let container = try await LLMModelFactory.shared.loadContainer(
             from: #hubDownloader(client),
             using: #huggingFaceTokenizerLoader(),
@@ -121,32 +124,36 @@ public struct MLXLLMLoader: ModelKindLoader {
     }
 
     public func delete(repoId: String) {
-        MLXHuggingFaceBackend.shared.delete(repoId: repoId)
+        backend.delete(repoId: repoId)
     }
 }
 
 // MARK: - VLM loader
 
 public struct MLXVLMLoader: ModelKindLoader {
-    public static let shared = MLXVLMLoader()
     public let kind = ModelKind.vlm
+    public let backend: MLXHuggingFaceBackend
+
+    public init(backend: MLXHuggingFaceBackend) {
+        self.backend = backend
+    }
 
     public func isDownloaded(repoId: String) -> Bool {
-        MLXHuggingFaceBackend.shared.isDownloaded(repoId: repoId)
+        backend.isDownloaded(repoId: repoId)
     }
 
     public func startDownload(
         repoId: String,
         progressHandler: @escaping @Sendable (Double) -> Void
     ) async throws {
-        try await MLXHuggingFaceBackend.shared.snapshot(repoId: repoId, progress: progressHandler)
+        try await backend.snapshot(repoId: repoId, progress: progressHandler)
     }
 
     public func load(
         repoId: String,
         progressHandler: @escaping @Sendable (Double) -> Void
     ) async throws -> any LoadedModel {
-        let client = MLXHuggingFaceBackend.shared.client
+        let client = backend.client
         let container = try await VLMModelFactory.shared.loadContainer(
             from: #hubDownloader(client),
             using: #huggingFaceTokenizerLoader(),
@@ -158,16 +165,22 @@ public struct MLXVLMLoader: ModelKindLoader {
     }
 
     public func delete(repoId: String) {
-        MLXHuggingFaceBackend.shared.delete(repoId: repoId)
+        backend.delete(repoId: repoId)
     }
 }
 
 // MARK: - Convenience entry point
 
 public enum ModelKitMLX {
+    /// Construct an `MLXHuggingFaceBackend(root:)` and register both MLX
+    /// loaders into the supplied registry.
     @MainActor
-    public static func register() {
-        ModelKindRegistry.register(MLXLLMLoader.shared)
-        ModelKindRegistry.register(MLXVLMLoader.shared)
+    public static func register(
+        into registry: ModelKindRegistry,
+        root: URL = ModelStorage.root
+    ) {
+        let backend = MLXHuggingFaceBackend(root: root)
+        registry.register(MLXLLMLoader(backend: backend))
+        registry.register(MLXVLMLoader(backend: backend))
     }
 }

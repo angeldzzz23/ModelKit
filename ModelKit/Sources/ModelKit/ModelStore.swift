@@ -9,11 +9,12 @@ import Observation
 /// Orchestrates downloads + loads. One loaded model **per kind** can coexist
 /// (e.g. Whisper for STT alongside an LLM for chat). Knows nothing about
 /// specific frameworks — delegates everything to the kind-specific loader
-/// registered in `ModelKindRegistry`.
+/// in its `ModelKindRegistry`.
 @MainActor
 @Observable
 public final class ModelStore {
-    public static let shared = ModelStore()
+    /// Per-store registry. Construct it, register loaders into it, hand it here.
+    public let registry: ModelKindRegistry
 
     /// Currently-loaded models, keyed by kind. At most one per kind.
     public private(set) var loadedModels: [ModelKind: any LoadedModel] = [:]
@@ -32,7 +33,9 @@ public final class ModelStore {
 
     private var downloadTasks: [String: Task<Void, Never>] = [:]
 
-    public init() {}
+    public init(registry: ModelKindRegistry) {
+        self.registry = registry
+    }
 
     // MARK: - Lookup
 
@@ -59,7 +62,7 @@ public final class ModelStore {
     // MARK: - Disk state
 
     public func isDownloaded(_ entry: ModelEntry) -> Bool {
-        ModelKindRegistry.loader(for: entry.kind)?.isDownloaded(repoId: entry.repoId) ?? false
+        registry.loader(for: entry.kind)?.isDownloaded(repoId: entry.repoId) ?? false
     }
 
     public func isDownloading(_ entry: ModelEntry) -> Bool {
@@ -74,7 +77,7 @@ public final class ModelStore {
 
     public func startDownload(_ entry: ModelEntry) {
         guard downloadTasks[entry.id] == nil,
-              let loader = ModelKindRegistry.loader(for: entry.kind) else { return }
+              let loader = registry.loader(for: entry.kind) else { return }
         let entryId = entry.id
         let repoId = entry.repoId
         downloadProgress[entryId] = 0
@@ -113,7 +116,7 @@ public final class ModelStore {
 
     public func load(_ entry: ModelEntry) async {
         guard loadingEntryId == nil,
-              let loader = ModelKindRegistry.loader(for: entry.kind) else { return }
+              let loader = registry.loader(for: entry.kind) else { return }
         loadingEntryId = entry.id
         // Drop any previous model of this kind before bringing up the new one.
         loadedModels.removeValue(forKey: entry.kind)
@@ -155,7 +158,7 @@ public final class ModelStore {
 
     public func delete(_ entry: ModelEntry) {
         unload(entry)
-        ModelKindRegistry.loader(for: entry.kind)?.delete(repoId: entry.repoId)
+        registry.loader(for: entry.kind)?.delete(repoId: entry.repoId)
         diskRevision &+= 1
     }
 

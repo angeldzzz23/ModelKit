@@ -34,21 +34,24 @@ public protocol ModelKindLoader: Sendable {
     func delete(repoId: String)
 }
 
-/// Maps `ModelKind` → loader. Loaders register at startup
-/// (e.g. `ModelKitMLX.register()`).
+/// Maps `ModelKind` → loader. Construct one, register loaders into it
+/// (e.g. `ModelKitMLX.register(into: registry)`), then hand it to a
+/// `ModelStore`. One registry per store keeps lookups isolated.
 @MainActor
-public enum ModelKindRegistry {
-    private static var loaders: [ModelKind: any ModelKindLoader] = [:]
+public final class ModelKindRegistry {
+    private var loaders: [ModelKind: any ModelKindLoader] = [:]
 
-    public static func register(_ loader: any ModelKindLoader) {
+    public init() {}
+
+    public func register(_ loader: any ModelKindLoader) {
         loaders[loader.kind] = loader
     }
 
-    public static func loader(for kind: ModelKind) -> (any ModelKindLoader)? {
+    public func loader(for kind: ModelKind) -> (any ModelKindLoader)? {
         loaders[kind]
     }
 
-    public static var registeredKinds: [ModelKind] {
+    public var registeredKinds: [ModelKind] {
         Array(loaders.keys)
     }
 }

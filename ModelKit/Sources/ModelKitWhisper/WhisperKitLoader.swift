@@ -24,18 +24,24 @@ public final class WhisperModel: LoadedModel, @unchecked Sendable {
 }
 
 public struct WhisperKitLoader: ModelKindLoader {
-    public static let shared = WhisperKitLoader()
     public let kind = ModelKind.whisper
+    public let root: URL
+    public let modelRepo: String
 
-    /// Override before first use to point at a different WhisperKit fork.
-    public nonisolated(unsafe) static var modelRepo: String = "argmaxinc/whisperkit-coreml"
+    public init(
+        root: URL = ModelStorage.root,
+        modelRepo: String = "argmaxinc/whisperkit-coreml"
+    ) {
+        self.root = root
+        self.modelRepo = modelRepo
+    }
 
     private func modelFolder(variant: String) -> URL {
         // HubApiWrapper uses `<downloadBase>/<repoType>/<repo.id>/…` where
         // repoType for models is "models". Variants live as subfolders.
-        ModelStorage.root
+        root
             .appendingPathComponent("models", isDirectory: true)
-            .appendingPathComponent(Self.modelRepo, isDirectory: true)
+            .appendingPathComponent(modelRepo, isDirectory: true)
             .appendingPathComponent(variant, isDirectory: true)
     }
 
@@ -51,8 +57,8 @@ public struct WhisperKitLoader: ModelKindLoader {
     ) async throws {
         _ = try await WhisperKit.download(
             variant: repoId,
-            downloadBase: ModelStorage.root,
-            from: Self.modelRepo,
+            downloadBase: root,
+            from: modelRepo,
             progressCallback: { progress in
                 progressHandler(progress.fractionCompleted)
             }
@@ -65,8 +71,8 @@ public struct WhisperKitLoader: ModelKindLoader {
     ) async throws -> any LoadedModel {
         let config = WhisperKitConfig(
             model: repoId,
-            downloadBase: ModelStorage.root,
-            modelRepo: Self.modelRepo,
+            downloadBase: root,
+            modelRepo: modelRepo,
             verbose: false,
             prewarm: true,
             load: true,
@@ -84,8 +90,14 @@ public struct WhisperKitLoader: ModelKindLoader {
 }
 
 public enum ModelKitWhisper {
+    /// Construct a `WhisperKitLoader(root:modelRepo:)` and register it
+    /// into the supplied registry.
     @MainActor
-    public static func register() {
-        ModelKindRegistry.register(WhisperKitLoader.shared)
+    public static func register(
+        into registry: ModelKindRegistry,
+        root: URL = ModelStorage.root,
+        modelRepo: String = "argmaxinc/whisperkit-coreml"
+    ) {
+        registry.register(WhisperKitLoader(root: root, modelRepo: modelRepo))
     }
 }
