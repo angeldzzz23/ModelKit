@@ -21,8 +21,15 @@ public final class ModelStore {
 
     /// Active downloads keyed by entry.id (`repoId#kind.id`).
     public private(set) var downloadProgress: [String: Double] = [:]
-    public private(set) var loadingEntryId: String?
+    /// entry.ids currently mid-load. Multiple loads can run concurrently —
+    /// the per-kind cap (one model per kind in `loadedModels`) is enforced
+    /// at completion: whichever load finishes last wins for that kind.
+    public private(set) var loadingEntryIds: Set<String> = []
     public private(set) var lastError: String?
+
+    /// Consumer-supplied list of entries to auto-load on
+    /// `loadDefaults()`. Mutate freely at runtime.
+    public var defaults: [ModelEntry] = []
 
     /// Bumped whenever on-disk model state changes (download completes,
     /// load succeeds, delete runs). Views can read this to subscribe to
@@ -67,6 +74,10 @@ public final class ModelStore {
 
     public func isDownloading(_ entry: ModelEntry) -> Bool {
         downloadTasks[entry.id] != nil
+    }
+
+    public func isLoading(_ entry: ModelEntry) -> Bool {
+        loadingEntryIds.contains(entry.id)
     }
 
     public func progress(for entry: ModelEntry) -> Double? {
@@ -115,12 +126,12 @@ public final class ModelStore {
     // MARK: - Load / unload
 
     public func load(_ entry: ModelEntry) async {
-        guard loadingEntryId == nil,
+        guard !loadingEntryIds.contains(entry.id),
               let loader = registry.loader(for: entry.kind) else { return }
-        loadingEntryId = entry.id
+        loadingEntryIds.insert(entry.id)
         // Drop any previous model of this kind before bringing up the new one.
         loadedModels.removeValue(forKey: entry.kind)
-        defer { loadingEntryId = nil }
+        defer { loadingEntryIds.remove(entry.id) }
 
         let entryId = entry.id
         do {
@@ -135,6 +146,20 @@ public final class ModelStore {
         } catch {
             self.lastError = "Load failed for \(entry.repoId): \(error.localizedDescription)"
             self.downloadProgress.removeValue(forKey: entry.id)
+        }
+    }
+
+    /// Concurrently `load(_:)` every entry in `defaults`. `load(_:)` is
+    /// idempotent on its own (no-op if already loaded or mid-load), so
+    /// repeat calls are safe.
+    public func loadDefaults() async {
+        let snapshot = defaults
+        await withTaskGroup(of: Void.self) { group in
+            for entry in snapshot {
+                group.addTask { [weak self] in
+                    await self?.load(entry)
+                }
+            }
         }
     }
 
