@@ -1,23 +1,51 @@
 // swift-tools-version: 6.2
-// The swift-tools-version declares the minimum version of Swift required to build this package.
 
 import PackageDescription
 
 let package = Package(
     name: "ModelKit",
+    platforms: [
+        .iOS("26.0"),
+        .macOS("26.0"),
+    ],
     products: [
-        // Products define the executables and libraries a package produces, making them visible to other packages.
-        .library(
-            name: "ModelKit",
-            targets: ["ModelKit"]
-        ),
+        .library(name: "ModelKit",        targets: ["ModelKit"]),
+        .library(name: "ModelKitMLX",     targets: ["ModelKitMLX"]),
+        .library(name: "ModelKitWhisper", targets: ["ModelKitWhisper"]),
+    ],
+    dependencies: [
+        .package(url: "https://github.com/ml-explore/mlx-swift-lm",         from: "3.31.3"),
+        .package(url: "https://github.com/huggingface/swift-transformers",  from: "1.3.0"),
+        .package(url: "https://github.com/huggingface/swift-huggingface",   "0.9.0" ..< "1.0.0"),
+        .package(url: "https://github.com/argmaxinc/WhisperKit.git",        branch: "main"),
     ],
     targets: [
-        // Targets are the basic building blocks of a package, defining a module or a test suite.
-        // Targets can depend on other targets in this package and products from dependencies.
+        // Pure Swift core: types + orchestration. No framework deps.
         .target(
             name: "ModelKit"
         ),
 
+        // MLX-backed loaders for `.llm` and `.vlm`.
+        .target(
+            name: "ModelKitMLX",
+            dependencies: [
+                "ModelKit",
+                .product(name: "MLXLLM",         package: "mlx-swift-lm"),
+                .product(name: "MLXVLM",         package: "mlx-swift-lm"),
+                .product(name: "MLXLMCommon",    package: "mlx-swift-lm"),
+                .product(name: "MLXHuggingFace", package: "mlx-swift-lm"),
+                .product(name: "Tokenizers",     package: "swift-transformers"),
+                .product(name: "HuggingFace",    package: "swift-huggingface"),
+            ]
+        ),
+
+        // WhisperKit-backed loader for `.whisper`.
+        .target(
+            name: "ModelKitWhisper",
+            dependencies: [
+                "ModelKit",
+                .product(name: "WhisperKit", package: "WhisperKit"),
+            ]
+        ),
     ]
 )
