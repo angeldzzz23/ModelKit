@@ -5,8 +5,8 @@ import PackageDescription
 let package = Package(
     name: "ModelKit",
     platforms: [
-        .iOS("26.0"),
-        .macOS("26.0"),
+        .iOS(.v18),
+        .macOS(.v15),
     ],
     products: [
         .library(name: "ModelKit",        targets: ["ModelKit"]),

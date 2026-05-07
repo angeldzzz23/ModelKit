@@ -23,6 +23,13 @@ public final class ModelStore {
     public private(set) var loadingEntryId: String?
     public private(set) var lastError: String?
 
+    /// Bumped whenever on-disk model state changes (download completes,
+    /// load succeeds, delete runs). Views can read this to subscribe to
+    /// disk-state changes via `@Observable`, since `isDownloaded(_:)`
+    /// itself queries the filesystem and has no observable signal of
+    /// its own.
+    public private(set) var diskRevision: Int = 0
+
     private var downloadTasks: [String: Task<Void, Never>] = [:]
 
     public init() {}
@@ -81,6 +88,7 @@ public final class ModelStore {
                 await MainActor.run {
                     self?.downloadProgress.removeValue(forKey: entryId)
                     self?.downloadTasks.removeValue(forKey: entryId)
+                    self?.diskRevision &+= 1
                 }
             } catch is CancellationError {
                 await MainActor.run {
@@ -120,6 +128,7 @@ public final class ModelStore {
             }
             self.downloadProgress.removeValue(forKey: entry.id)
             self.loadedModels[entry.kind] = model
+            self.diskRevision &+= 1
         } catch {
             self.lastError = "Load failed for \(entry.repoId): \(error.localizedDescription)"
             self.downloadProgress.removeValue(forKey: entry.id)
@@ -147,6 +156,7 @@ public final class ModelStore {
     public func delete(_ entry: ModelEntry) {
         unload(entry)
         ModelKindRegistry.loader(for: entry.kind)?.delete(repoId: entry.repoId)
+        diskRevision &+= 1
     }
 
     public func clearError() { lastError = nil }
