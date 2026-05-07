@@ -6,22 +6,19 @@
 import Foundation
 import Observation
 
-/// Orchestrates downloads + loads. Knows nothing about specific frameworks —
-/// delegates everything to the kind-specific loader registered in
-/// `ModelKindRegistry`. Adding a new kind is a no-op for this file.
+/// Orchestrates downloads + loads. One loaded model **per kind** can coexist
+/// (e.g. Whisper for STT alongside an LLM for chat). Knows nothing about
+/// specific frameworks — delegates everything to the kind-specific loader
+/// registered in `ModelKindRegistry`.
 @MainActor
 @Observable
 public final class ModelStore {
     public static let shared = ModelStore()
 
-    // Currently-loaded model.
-    public private(set) var loadedModel: (any LoadedModel)?
-    public var loadedEntryId: String? {
-        guard let m = loadedModel else { return nil }
-        return "\(m.repoId)#\(m.kind.id)"
-    }
+    /// Currently-loaded models, keyed by kind. At most one per kind.
+    public private(set) var loadedModels: [ModelKind: any LoadedModel] = [:]
 
-    // Active downloads keyed by entry.id (`repoId#kind.id`).
+    /// Active downloads keyed by entry.id (`repoId#kind.id`).
     public private(set) var downloadProgress: [String: Double] = [:]
     public private(set) var loadingEntryId: String?
     public private(set) var lastError: String?
@@ -29,6 +26,28 @@ public final class ModelStore {
     private var downloadTasks: [String: Task<Void, Never>] = [:]
 
     public init() {}
+
+    // MARK: - Lookup
+
+    public func loadedModel(for kind: ModelKind) -> (any LoadedModel)? {
+        loadedModels[kind]
+    }
+
+    /// Convenience cast: `store.loadedModel(LLMModel.self)`.
+    public func loadedModel<T: LoadedModel>(_ type: T.Type) -> T? {
+        for model in loadedModels.values {
+            if let typed = model as? T { return typed }
+        }
+        return nil
+    }
+
+    public func isLoaded(_ entry: ModelEntry) -> Bool {
+        loadedModels[entry.kind]?.repoId == entry.repoId
+    }
+
+    public var loadedEntryIds: Set<String> {
+        Set(loadedModels.values.map { "\($0.repoId)#\($0.kind.id)" })
+    }
 
     // MARK: - Disk state
 
@@ -88,7 +107,8 @@ public final class ModelStore {
         guard loadingEntryId == nil,
               let loader = ModelKindRegistry.loader(for: entry.kind) else { return }
         loadingEntryId = entry.id
-        loadedModel = nil
+        // Drop any previous model of this kind before bringing up the new one.
+        loadedModels.removeValue(forKey: entry.kind)
         defer { loadingEntryId = nil }
 
         let entryId = entry.id
@@ -99,23 +119,33 @@ public final class ModelStore {
                 }
             }
             self.downloadProgress.removeValue(forKey: entry.id)
-            self.loadedModel = model
+            self.loadedModels[entry.kind] = model
         } catch {
             self.lastError = "Load failed for \(entry.repoId): \(error.localizedDescription)"
             self.downloadProgress.removeValue(forKey: entry.id)
         }
     }
 
-    public func unload() {
-        loadedModel = nil
+    /// Unload the model loaded for the given kind, if any.
+    public func unload(_ kind: ModelKind) {
+        loadedModels.removeValue(forKey: kind)
+    }
+
+    /// Unload a specific entry (only if it's the one currently loaded for its kind).
+    public func unload(_ entry: ModelEntry) {
+        if loadedModels[entry.kind]?.repoId == entry.repoId {
+            loadedModels.removeValue(forKey: entry.kind)
+        }
+    }
+
+    public func unloadAll() {
+        loadedModels.removeAll()
     }
 
     // MARK: - Delete
 
     public func delete(_ entry: ModelEntry) {
-        if loadedModel?.repoId == entry.repoId, loadedModel?.kind == entry.kind {
-            unload()
-        }
+        unload(entry)
         ModelKindRegistry.loader(for: entry.kind)?.delete(repoId: entry.repoId)
     }
 
