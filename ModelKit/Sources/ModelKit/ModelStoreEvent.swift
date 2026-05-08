@@ -17,6 +17,68 @@ public enum ModelStoreEvent: Sendable {
     case loadFailed(ModelEntry, message: String)
     case unloaded(ModelKind)
     case deleted(ModelEntry)
+
+    /// Stable case identifier — branch on this without unwrapping
+    /// associated values.
+    public enum EventType: String, Sendable {
+        case downloadStarted, downloadFinished, downloadFailed
+        case loaded, loadFailed
+        case unloaded, deleted
+    }
+}
+
+public extension ModelStoreEvent {
+    /// Which kind of event this is. Always available.
+    var type: EventType {
+        switch self {
+        case .downloadStarted:  .downloadStarted
+        case .downloadFinished: .downloadFinished
+        case .downloadFailed:   .downloadFailed
+        case .loaded:           .loaded
+        case .loadFailed:       .loadFailed
+        case .unloaded:         .unloaded
+        case .deleted:          .deleted
+        }
+    }
+
+    /// The associated `ModelEntry`, if any. `nil` only for `.unloaded`,
+    /// which carries a `ModelKind` instead.
+    var entry: ModelEntry? {
+        switch self {
+        case .downloadStarted(let e),
+             .downloadFinished(let e),
+             .downloadFailed(let e, _),
+             .loaded(let e),
+             .loadFailed(let e, _),
+             .deleted(let e):
+            return e
+        case .unloaded:
+            return nil
+        }
+    }
+
+    /// The `ModelKind`. Always available — taken from `entry.kind` for
+    /// entry-bearing events, or directly from `.unloaded(ModelKind)`.
+    var modelKind: ModelKind {
+        switch self {
+        case .unloaded(let k): return k
+        case .downloadStarted(let e),
+             .downloadFinished(let e),
+             .downloadFailed(let e, _),
+             .loaded(let e),
+             .loadFailed(let e, _),
+             .deleted(let e):
+            return e.kind
+        }
+    }
+
+    /// Populated for `*Failed` events; `nil` otherwise.
+    var errorMessage: String? {
+        switch self {
+        case .downloadFailed(_, let m), .loadFailed(_, let m): return m
+        default: return nil
+        }
+    }
 }
 
 extension ModelStoreEvent: CustomStringConvertible {
