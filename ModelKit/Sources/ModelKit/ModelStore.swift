@@ -39,9 +39,36 @@ public final class ModelStore {
     public private(set) var diskRevision: Int = 0
 
     private var downloadTasks: [String: Task<Void, Never>] = [:]
+    private var eventContinuations: [UUID: AsyncStream<ModelStoreEvent>.Continuation] = [:]
 
     public init(registry: ModelKindRegistry) {
         self.registry = registry
+    }
+
+    // MARK: - Event stream
+
+    /// Long-lived stream of state-change events. Returns a fresh stream
+    /// per call so multiple subscribers can run concurrently. Each
+    /// subscription is automatically cleaned up when the consumer's task
+    /// is cancelled.
+    public func events() -> AsyncStream<ModelStoreEvent> {
+        let id = UUID()
+        return AsyncStream { continuation in
+            Task { @MainActor [weak self] in
+                self?.eventContinuations[id] = continuation
+            }
+            continuation.onTermination = { [weak self] _ in
+                Task { @MainActor in
+                    self?.eventContinuations.removeValue(forKey: id)
+                }
+            }
+        }
+    }
+
+    private func emit(_ event: ModelStoreEvent) {
+        for continuation in eventContinuations.values {
+            continuation.yield(event)
+        }
     }
 
     // MARK: - Lookup
@@ -92,7 +119,8 @@ public final class ModelStore {
         let entryId = entry.id
         let repoId = entry.repoId
         downloadProgress[entryId] = 0
-        downloadTasks[entryId] = Task { [loader, weak self] in
+        emit(.downloadStarted(entry))
+        downloadTasks[entryId] = Task { [loader, weak self, entry] in
             do {
                 try await loader.startDownload(repoId: repoId) { fraction in
                     Task { @MainActor in
@@ -103,6 +131,7 @@ public final class ModelStore {
                     self?.downloadProgress.removeValue(forKey: entryId)
                     self?.downloadTasks.removeValue(forKey: entryId)
                     self?.diskRevision &+= 1
+                    self?.emit(.downloadFinished(entry))
                 }
             } catch is CancellationError {
                 await MainActor.run {
@@ -110,10 +139,12 @@ public final class ModelStore {
                     self?.downloadTasks.removeValue(forKey: entryId)
                 }
             } catch {
+                let message = error.localizedDescription
                 await MainActor.run {
-                    self?.lastError = "Download failed for \(repoId): \(error.localizedDescription)"
+                    self?.lastError = "Download failed for \(repoId): \(message)"
                     self?.downloadProgress.removeValue(forKey: entryId)
                     self?.downloadTasks.removeValue(forKey: entryId)
+                    self?.emit(.downloadFailed(entry, message: message))
                 }
             }
         }
@@ -143,9 +174,11 @@ public final class ModelStore {
             self.downloadProgress.removeValue(forKey: entry.id)
             self.loadedModels[entry.kind] = model
             self.diskRevision &+= 1
+            self.emit(.loaded(entry))
         } catch {
             self.lastError = "Load failed for \(entry.repoId): \(error.localizedDescription)"
             self.downloadProgress.removeValue(forKey: entry.id)
+            self.emit(.loadFailed(entry, message: error.localizedDescription))
         }
     }
 
@@ -165,18 +198,25 @@ public final class ModelStore {
 
     /// Unload the model loaded for the given kind, if any.
     public func unload(_ kind: ModelKind) {
+        guard loadedModels[kind] != nil else { return }
         loadedModels.removeValue(forKey: kind)
+        emit(.unloaded(kind))
     }
 
     /// Unload a specific entry (only if it's the one currently loaded for its kind).
     public func unload(_ entry: ModelEntry) {
         if loadedModels[entry.kind]?.repoId == entry.repoId {
             loadedModels.removeValue(forKey: entry.kind)
+            emit(.unloaded(entry.kind))
         }
     }
 
     public func unloadAll() {
+        let kinds = Array(loadedModels.keys)
         loadedModels.removeAll()
+        for kind in kinds {
+            emit(.unloaded(kind))
+        }
     }
 
     // MARK: - Delete
@@ -185,6 +225,7 @@ public final class ModelStore {
         unload(entry)
         registry.loader(for: entry.kind)?.delete(repoId: entry.repoId)
         diskRevision &+= 1
+        emit(.deleted(entry))
     }
 
     public func clearError() { lastError = nil }
