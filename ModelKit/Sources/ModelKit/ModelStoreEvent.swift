@@ -13,6 +13,7 @@ public enum ModelStoreEvent: Sendable {
     case downloadStarted(ModelEntry)
     case downloadFinished(ModelEntry)
     case downloadFailed(ModelEntry, message: String)
+    case loadStarted(ModelEntry)
     case loaded(ModelEntry)
     case loadFailed(ModelEntry, message: String)
     case unloaded(ModelKind)
@@ -22,7 +23,7 @@ public enum ModelStoreEvent: Sendable {
     /// associated values.
     public enum EventType: String, Sendable {
         case downloadStarted, downloadFinished, downloadFailed
-        case loaded, loadFailed
+        case loadStarted, loaded, loadFailed
         case unloaded, deleted
     }
 }
@@ -34,6 +35,7 @@ public extension ModelStoreEvent {
         case .downloadStarted:  .downloadStarted
         case .downloadFinished: .downloadFinished
         case .downloadFailed:   .downloadFailed
+        case .loadStarted:      .loadStarted
         case .loaded:           .loaded
         case .loadFailed:       .loadFailed
         case .unloaded:         .unloaded
@@ -48,6 +50,7 @@ public extension ModelStoreEvent {
         case .downloadStarted(let e),
              .downloadFinished(let e),
              .downloadFailed(let e, _),
+             .loadStarted(let e),
              .loaded(let e),
              .loadFailed(let e, _),
              .deleted(let e):
@@ -65,6 +68,7 @@ public extension ModelStoreEvent {
         case .downloadStarted(let e),
              .downloadFinished(let e),
              .downloadFailed(let e, _),
+             .loadStarted(let e),
              .loaded(let e),
              .loadFailed(let e, _),
              .deleted(let e):
@@ -87,6 +91,7 @@ extension ModelStoreEvent: CustomStringConvertible {
         case .downloadStarted(let e):       "downloadStarted(\(e.repoId))"
         case .downloadFinished(let e):      "downloadFinished(\(e.repoId))"
         case .downloadFailed(let e, let m): "downloadFailed(\(e.repoId), \(m))"
+        case .loadStarted(let e):           "loadStarted(\(e.repoId))"
         case .loaded(let e):                "loaded(\(e.repoId))"
         case .loadFailed(let e, let m):     "loadFailed(\(e.repoId), \(m))"
         case .unloaded(let kind):           "unloaded(\(kind.id))"

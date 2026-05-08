@@ -157,11 +157,15 @@ public final class ModelStore {
     // MARK: - Load / unload
 
     public func load(_ entry: ModelEntry) async {
+        // Idempotent: same entry already in memory → no-op. Use `unload`
+        // then `load` if you want to force a reload.
+        if isLoaded(entry) { return }
         guard !loadingEntryIds.contains(entry.id),
               let loader = registry.loader(for: entry.kind) else { return }
         loadingEntryIds.insert(entry.id)
         // Drop any previous model of this kind before bringing up the new one.
         loadedModels.removeValue(forKey: entry.kind)
+        emit(.loadStarted(entry))
         defer { loadingEntryIds.remove(entry.id) }
 
         let entryId = entry.id
