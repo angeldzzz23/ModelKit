@@ -8,6 +8,7 @@
 //
 
 import Foundation
+import CoreImage
 @_exported import MLXLMCommon
 import MLXLLM
 import MLXVLM
@@ -60,8 +61,8 @@ extension LLMModel {
 // MARK: - VLM streaming
 
 extension VLMModel {
-    /// Text-only streaming for VLMs. (Image inputs would extend
-    /// `ChatTurn` with attachments — out of scope for v1.)
+    /// Text-only streaming for VLMs. Use `stream(turns:images:)` to
+    /// pass image attachments along with the prompt.
     public func stream(
         turns: [ChatTurn],
         parameters: GenerateParameters = GenerateParameters()
@@ -71,6 +72,56 @@ extension VLMModel {
             turns: turns,
             parameters: parameters
         )
+    }
+
+    /// Stream a VLM reply with image attachments. `images` are raw
+    /// JPEG/PNG bytes; each is decoded into a `CIImage` and attached to
+    /// the latest user message in the conversation. Images that fail to
+    /// decode are silently skipped.
+    public func stream(
+        turns: [ChatTurn],
+        images: [Data],
+        parameters: GenerateParameters = GenerateParameters()
+    ) async throws -> AsyncStream<String> {
+        return try await container.perform { (context: ModelContext) in
+            let mlxImages: [UserInput.Image] = images.compactMap { bytes in
+                guard let ci = CIImage(data: bytes) else { return nil }
+                return .ciImage(ci)
+            }
+
+            // MLXLMCommon attaches images per-message, not at the
+            // UserInput level. Bind them to the most recent user turn.
+            var messages = turns.map(\.asMLXMessage)
+            if !mlxImages.isEmpty,
+               let lastUserIdx = messages.lastIndex(where: { $0.role == .user }) {
+                let last = messages[lastUserIdx]
+                messages[lastUserIdx] = Chat.Message(
+                    role: .user,
+                    content: last.content,
+                    images: mlxImages
+                )
+            }
+
+            let userInput = UserInput(chat: messages)
+            let lmInput = try await context.processor.prepare(input: userInput)
+            let upstream = try MLXLMCommon.generate(
+                input: lmInput,
+                parameters: parameters,
+                context: context
+            )
+            return AsyncStream<String> { continuation in
+                let task = Task {
+                    for await event in upstream {
+                        if Task.isCancelled { break }
+                        if case .chunk(let text) = event {
+                            continuation.yield(text)
+                        }
+                    }
+                    continuation.finish()
+                }
+                continuation.onTermination = { _ in task.cancel() }
+            }
+        }
     }
 }
 
