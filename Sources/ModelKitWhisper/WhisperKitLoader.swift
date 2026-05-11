@@ -51,6 +51,10 @@ public struct WhisperKitLoader: ModelKindLoader {
         return !entries.isEmpty
     }
 
+    public func localURL(repoId: String) -> URL? {
+        modelFolder(variant: repoId)
+    }
+
     public func startDownload(
         repoId: String,
         progressHandler: @escaping @Sendable (Double) -> Void

@@ -59,6 +59,11 @@ public final class MLXHuggingFaceBackend: @unchecked Sendable {
         return !entries.isEmpty
     }
 
+    public func localURL(repoId: String) -> URL? {
+        guard let id = Repo.ID(rawValue: repoId) else { return nil }
+        return cache.snapshotsDirectory(repo: id, kind: .model)
+    }
+
     public func snapshot(
         repoId: String,
         progress: @escaping @Sendable (Double) -> Void
@@ -101,6 +106,10 @@ public struct MLXLLMLoader: ModelKindLoader {
         backend.isDownloaded(repoId: repoId)
     }
 
+    public func localURL(repoId: String) -> URL? {
+        backend.localURL(repoId: repoId)
+    }
+
     public func startDownload(
         repoId: String,
         progressHandler: @escaping @Sendable (Double) -> Void
@@ -140,6 +149,10 @@ public struct MLXVLMLoader: ModelKindLoader {
 
     public func isDownloaded(repoId: String) -> Bool {
         backend.isDownloaded(repoId: repoId)
+    }
+
+    public func localURL(repoId: String) -> URL? {
+        backend.localURL(repoId: repoId)
     }
 
     public func startDownload(

@@ -32,6 +32,17 @@ public protocol ModelKindLoader: Sendable {
     ) async throws -> any LoadedModel
 
     func delete(repoId: String)
+
+    /// Where this repo's files live (or would live) on disk. Pure path
+    /// computation — does NOT check whether files exist; use `isDownloaded`
+    /// for that. Returns nil if this loader does not manage the given
+    /// `repoId`. Used by side-channel transports (peer transfer, backup,
+    /// integrity checks) that need to enumerate or write files directly.
+    func localURL(repoId: String) -> URL?
+}
+
+extension ModelKindLoader {
+    public func localURL(repoId: String) -> URL? { nil }
 }
 
 /// Maps `ModelKind` → loader. Construct one, register loaders into it
